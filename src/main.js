@@ -13,6 +13,10 @@ const controls = document.getElementById('controls');
 const fileCount = document.getElementById('file-count');
 const clearAllBtn = document.getElementById('clear-all');
 const convertBtn = document.getElementById('convert-btn');
+const compressCheckbox = document.getElementById('compress-checkbox');
+const qualitySlider = document.getElementById('quality-slider');
+const qualityValue = document.getElementById('quality-value');
+const qualityControl = document.getElementById('quality-control');
 
 // Event Listeners
 browseBtn.addEventListener('click', () => fileInput.click());
@@ -44,12 +48,22 @@ clearAllBtn.addEventListener('click', () => {
 
 convertBtn.addEventListener('click', convertToPdf);
 
+compressCheckbox.addEventListener('change', (e) => {
+  qualityControl.style.opacity = e.target.checked ? '1' : '0.5';
+  qualityControl.style.pointerEvents = e.target.checked ? 'auto' : 'none';
+});
+
+qualitySlider.addEventListener('input', (e) => {
+  qualityValue.textContent = e.target.value;
+});
+
 // Functions
 function handleFiles(files) {
-  const newFiles = Array.from(files).filter(file => file.type === 'image/png');
+  const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+  const newFiles = Array.from(files).filter(file => validTypes.includes(file.type));
 
   if (newFiles.length === 0 && files.length > 0) {
-    alert('Please select PNG files only.');
+    alert('Please select supported image files (PNG, JPG, WEBP).');
     return;
   }
 
@@ -134,8 +148,22 @@ async function convertToPdf() {
       }
 
       const file = selectedFiles[i];
-      const imgData = await readFileAsDataURL(file);
-      const imgProps = await getImageProperties(imgData);
+      let imgData, format;
+      let imgProps;
+
+      if (compressCheckbox.checked) {
+        const quality = parseFloat(qualitySlider.value);
+        imgData = await compressImage(file, quality);
+        format = 'JPEG'; // Compressed images are always JPEG
+        imgProps = await getImageProperties(imgData);
+      } else {
+        imgData = await readFileAsDataURL(file);
+        imgProps = await getImageProperties(imgData);
+        // Determine format
+        format = 'PNG';
+        if (file.type === 'image/jpeg' || file.type === 'image/jpg') format = 'JPEG';
+        if (file.type === 'image/webp') format = 'WEBP';
+      }
 
       const pdfWidth = doc.internal.pageSize.getWidth();
       const pdfHeight = doc.internal.pageSize.getHeight();
@@ -152,7 +180,7 @@ async function convertToPdf() {
       const x = (pdfWidth - w) / 2;
       const y = (pdfHeight - h) / 2;
 
-      doc.addImage(imgData, 'PNG', x, y, w, h);
+      doc.addImage(imgData, format, x, y, w, h);
     }
 
     doc.save('converted-images.pdf');
@@ -180,5 +208,44 @@ function getImageProperties(url) {
     img.onload = () => resolve({ width: img.width, height: img.height });
     img.onerror = reject;
     img.src = url;
+  });
+}
+
+function compressImage(file, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        // Optional: Limit max dimensions if needed, e.g., max 2000px
+        // const MAX_DIMENSION = 2000;
+        // if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+        //   if (width > height) {
+        //     height *= MAX_DIMENSION / width;
+        //     width = MAX_DIMENSION;
+        //   } else {
+        //     width *= MAX_DIMENSION / height;
+        //     height = MAX_DIMENSION;
+        //   }
+        // }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Compress to JPEG
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(dataUrl);
+      };
+      img.onerror = (error) => reject(error);
+    };
+    reader.onerror = (error) => reject(error);
   });
 }
