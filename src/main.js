@@ -17,6 +17,7 @@ const compressCheckbox = document.getElementById('compress-checkbox');
 const qualitySlider = document.getElementById('quality-slider');
 const qualityValue = document.getElementById('quality-value');
 const qualityControl = document.getElementById('quality-control');
+const pageSizeSelect = document.getElementById('page-size-select');
 
 // Event Listeners
 browseBtn.addEventListener('click', () => fileInput.click());
@@ -84,6 +85,15 @@ function renderFileList() {
   selectedFiles.forEach((file, index) => {
     const li = document.createElement('li');
     li.className = 'file-item';
+    li.draggable = true;
+    li.dataset.index = index;
+
+    // Drag & Drop Events
+    li.addEventListener('dragstart', handleDragStart);
+    li.addEventListener('dragover', handleDragOver);
+    li.addEventListener('drop', handleDrop);
+    li.addEventListener('dragenter', handleDragEnter);
+    li.addEventListener('dragleave', handleDragLeave);
 
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -121,6 +131,41 @@ function renderFileList() {
 
 function removeFile(index) {
   selectedFiles.splice(index, 1);
+  renderFileList();
+}
+
+// Drag & Drop Handlers
+let dragStartIndex;
+
+function handleDragStart(e) {
+  dragStartIndex = +this.closest('li').dataset.index;
+  this.classList.add('dragging');
+}
+
+function handleDragOver(e) {
+  e.preventDefault();
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  const dragEndIndex = +this.closest('li').dataset.index;
+  swapItems(dragStartIndex, dragEndIndex);
+  this.classList.remove('drag-over-item');
+  document.querySelector('.dragging')?.classList.remove('dragging');
+}
+
+function handleDragEnter() {
+  this.classList.add('drag-over-item');
+}
+
+function handleDragLeave() {
+  this.classList.remove('drag-over-item');
+}
+
+function swapItems(fromIndex, toIndex) {
+  const itemToMove = selectedFiles[fromIndex];
+  selectedFiles.splice(fromIndex, 1);
+  selectedFiles.splice(toIndex, 0, itemToMove);
   renderFileList();
 }
 
@@ -165,22 +210,92 @@ async function convertToPdf() {
         if (file.type === 'image/webp') format = 'WEBP';
       }
 
-      const pdfWidth = doc.internal.pageSize.getWidth();
-      const pdfHeight = doc.internal.pageSize.getHeight();
+      const pageSize = pageSizeSelect.value;
+      let pdfWidth, pdfHeight;
 
-      // Calculate ratio to fit page
-      const widthRatio = pdfWidth / imgProps.width;
-      const heightRatio = pdfHeight / imgProps.height;
-      const ratio = Math.min(widthRatio, heightRatio);
+      if (pageSize === 'a4') {
+        pdfWidth = 210;
+        pdfHeight = 297;
+      } else if (pageSize === 'letter') {
+        pdfWidth = 215.9;
+        pdfHeight = 279.4;
+      } else {
+        // This 'else' block is for the default case if pageSizeSelect.value is not 'a4', 'letter', or 'fit'.
+        // However, the 'fit' case is handled explicitly below.
+        // For now, we'll keep it as a fallback, though it might not be strictly necessary
+        // if pageSizeSelect always has a valid value.
+        pdfWidth = doc.internal.pageSize.getWidth();
+        pdfHeight = doc.internal.pageSize.getHeight();
+      }
 
-      const w = imgProps.width * ratio;
-      const h = imgProps.height * ratio;
+      // If not first page and not fit-to-image (which handles its own dimensions usually, 
+      // but jsPDF default is A4, so we need to be careful. 
+      // Actually, for 'fit', we want the page to match the image size? 
+      // The original code used doc.internal.pageSize which is A4 by default.
+      // Let's stick to the original logic for 'fit' which scales image to A4 width.
+      // Wait, original logic:
+      // const pdfWidth = doc.internal.pageSize.getWidth();
+      // ...
+      // const w = imgProps.width * ratio;
+      // ...
+      // doc.addImage(..., w, h);
+      // This scales image to fit A4. It doesn't resize the PDF page itself.
+      // Let's clarify: "Fit to Image" usually means page size = image size.
+      // But the previous implementation just fit the image INTO the default A4 page.
+      // Let's keep "Fit to Image" as "Fit image to Page" (default behavior) for now to avoid breaking changes,
+      // OR actually implement true "Fit Page to Image".
+      // Given the prompt "Page Size Configuration (A4, Letter, Fit)", "Fit" usually implies "Fit Page to Image".
+      // Let's implement true Fit Page to Image for 'fit' option.
 
-      // Center image
-      const x = (pdfWidth - w) / 2;
-      const y = (pdfHeight - h) / 2;
+      if (pageSize === 'fit') {
+        // For true fit-to-image, we need to set page size to image size.
+        // jsPDF addPage takes (format, orientation).
+        // But we are inside a loop.
 
-      doc.addImage(imgData, format, x, y, w, h);
+        // Convert px to mm (approx 1px = 0.264583 mm)
+        const pxToMm = 0.264583;
+        const imgWidthMm = imgProps.width * pxToMm;
+        const imgHeightMm = imgProps.height * pxToMm;
+
+        if (i === 0) {
+          // Resize first page
+          doc.deletePage(1);
+          doc.addPage([imgWidthMm, imgHeightMm], imgWidthMm > imgHeightMm ? 'l' : 'p');
+        } else {
+          doc.addPage([imgWidthMm, imgHeightMm], imgWidthMm > imgHeightMm ? 'l' : 'p');
+        }
+
+        doc.addImage(imgData, format, 0, 0, imgWidthMm, imgHeightMm);
+      } else {
+        // A4 or Letter
+        if (i > 0) {
+          doc.addPage(pageSize, 'p'); // Default portrait for standard sizes
+        } else if (i === 0 && pageSize !== 'fit') {
+          // Reset first page if needed? jsPDF starts with A4.
+          // If user selected Letter, we might need to set it.
+          // Easier to just add a page and delete the first blank one if we want to be strict,
+          // but jsPDF default is A4.
+          // Let's just set the page size if possible or just use addPage logic.
+          // Actually, setPage() might be better.
+        }
+
+        // Calculate dimensions to fit within page with margin
+        const margin = 10; // 10mm margin
+        const availableWidth = pdfWidth - (margin * 2);
+        const availableHeight = pdfHeight - (margin * 2);
+
+        const widthRatio = availableWidth / imgProps.width;
+        const heightRatio = availableHeight / imgProps.height;
+        const ratio = Math.min(widthRatio, heightRatio);
+
+        const w = imgProps.width * ratio;
+        const h = imgProps.height * ratio;
+
+        const x = (pdfWidth - w) / 2;
+        const y = (pdfHeight - h) / 2;
+
+        doc.addImage(imgData, format, x, y, w, h);
+      }
     }
 
     doc.save('converted-images.pdf');
