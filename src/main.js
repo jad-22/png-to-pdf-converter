@@ -188,9 +188,7 @@ async function convertToPdf() {
     const doc = new jsPDF();
 
     for (let i = 0; i < selectedFiles.length; i++) {
-      if (i > 0) {
-        doc.addPage();
-      }
+
 
       const file = selectedFiles[i];
       let imgData, format;
